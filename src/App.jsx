@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 
 // ==========================================
-// 🔴 APNI SUPABASE DETAILS YAHAN PASTE KAREIN:
-const SUPABASE_URL = "https://nbitwmhdcqaqbueeoltv.supabase.co"; // Step 3 se Project URL
-const SUPABASE_KEY = "sb_publishable_bk9aAGYfb2on1acUR15dCA_87iL-xyM"; // Step 3 se anon key
+// 🔴 APNI SUPABASE DETAILS:
+const SUPABASE_URL = "https://nbitwmhdcqaqbueeoltv.supabase.co"; // Apna Supabase URL dalein
+const SUPABASE_KEY = "sb_publishable_bk9aAGYfb2on1acUR15dCA_87iL-xyM"; // Apni publishable anon key dalein
 // ==========================================
 
 export default function App() {
@@ -14,8 +14,10 @@ export default function App() {
   const [currentRunningMonth, setCurrentRunningMonth] = useState("3");
   const [dueDate, setDueDate] = useState("10 Nov");
   const [memberSequenceInput, setMemberSequenceInput] = useState("");
+  
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
 
   const [receiptModal, setReceiptModal] = useState(null);
   const [generatedImgUrl, setGeneratedImgUrl] = useState(null);
@@ -23,7 +25,13 @@ export default function App() {
 
   const [kametiData, setKametiData] = useState(null);
 
-  // 1. App open hone par Supabase Cloud se data load karna
+  // Status message temporary popup
+  const showBanner = (msg) => {
+    setSyncMessage(msg);
+    setTimeout(() => setSyncMessage(""), 3500);
+  };
+
+  // 1. Cloud se data load karna
   useEffect(() => {
     async function loadFromCloud() {
       setIsLoading(true);
@@ -37,13 +45,13 @@ export default function App() {
         const data = await res.json();
         if (data && data.length > 0 && data[0].data) {
           setKametiData(data[0].data);
+          localStorage.setItem("kameti_app_pro_data", JSON.stringify(data[0].data));
         } else {
-          // Fallback to local storage if cloud is blank
           const local = localStorage.getItem("kameti_app_pro_data");
           if (local) setKametiData(JSON.parse(local));
         }
       } catch (err) {
-        console.error("Cloud load error, using local data", err);
+        console.error("Cloud load error, falling back to local:", err);
         const local = localStorage.getItem("kameti_app_pro_data");
         if (local) setKametiData(JSON.parse(local));
       } finally {
@@ -60,16 +68,19 @@ export default function App() {
     }
   }, []);
 
-  // 2. Koi bhi change hote hi Cloud Database me auto-save hona
-  const saveToCloudAndLocal = async (newData) => {
+  // 2. Cloud Database me data save karna
+  const saveToCloudAndLocal = async (newData, manualTrigger = false) => {
     setKametiData(newData);
     localStorage.setItem("kameti_app_pro_data", JSON.stringify(newData));
 
-    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_PROJECT_ID")) return;
+    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
+      if (manualTrigger) showBanner("⚠️ Supabase Keys missing! Saved locally.");
+      return;
+    }
 
     setIsSyncing(true);
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/kameti_data`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/kameti_data`, {
         method: "POST",
         headers: {
           apikey: SUPABASE_KEY,
@@ -83,8 +94,17 @@ export default function App() {
           updated_at: new Date().toISOString(),
         }),
       });
+
+      if (res.ok) {
+        if (manualTrigger) showBanner("✅ Data Cloud Par Successfully Save Ho Gaya!");
+      } else {
+        const errorText = await res.text();
+        console.error("Supabase Save Error:", errorText);
+        showBanner("❌ Cloud Error! RLS Policy check karein.");
+      }
     } catch (err) {
-      console.error("Cloud sync error:", err);
+      console.error("Cloud error:", err);
+      showBanner("❌ Connection Error! Internet check karein.");
     } finally {
       setIsSyncing(false);
     }
@@ -141,7 +161,7 @@ export default function App() {
       currentMonth: startMonth,
     };
 
-    saveToCloudAndLocal(newKametiObj);
+    saveToCloudAndLocal(newKametiObj, true);
   };
 
   const updatePaymentStatus = (month, member, status, mode = "Cash") => {
@@ -159,12 +179,47 @@ export default function App() {
         },
       },
     };
-    saveToCloudAndLocal(updated);
+    saveToCloudAndLocal(updated, false);
   };
 
-  // Reset Cloud and Local
+  // Manual Push to Cloud Button
+  const handleManualCloudSync = () => {
+    if (!kametiData) return;
+    saveToCloudAndLocal(kametiData, true);
+  };
+
+  // Backup Download (.json)
+  const exportBackup = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(kametiData));
+    const a = document.createElement("a");
+    a.href = dataStr;
+    a.download = `${kametiData.name.replace(/\s+/g, "_")}_backup.json`;
+    a.click();
+    showBanner("💾 Backup file download ho gayi!");
+  };
+
+  // Restore Backup
+  const importBackup = (e) => {
+    const reader = new FileReader();
+    reader.readAsText(e.target.files[0], "UTF-8");
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (parsed.lineup && parsed.payments) {
+          saveToCloudAndLocal(parsed, true);
+          showBanner("✅ Backup restore hokar Cloud me save ho gaya!");
+        } else {
+          alert("File valid backup nahi hai!");
+        }
+      } catch (err) {
+        alert("File padhne me error aayi!");
+      }
+    };
+  };
+
+  // Reset
   const handleReset = async () => {
-    if (confirm("Reset karne par cloud aur local dono jagah se data delete ho jayega. Sure hain?")) {
+    if (confirm("Reset karne par data clear ho jayega. Sure hain?")) {
       localStorage.removeItem("kameti_app_pro_data");
       setKametiData(null);
       if (SUPABASE_URL && !SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
@@ -176,10 +231,11 @@ export default function App() {
           },
         });
       }
+      showBanner("App reset ho gaya!");
     }
   };
 
-  // Canvas Receipt Generator
+  // Slip Generator
   const generateSlipImage = (member, month, isPaid, mode, date) => {
     const canvas = document.createElement("canvas");
     canvas.width = 600;
@@ -350,7 +406,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 p-3 sm:p-5 max-w-xl mx-auto font-sans text-slate-800 pb-20">
-      {/* Header */}
+      {/* Toast Notification Banner */}
+      {syncMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-2xl border border-slate-700 animate-bounce">
+          {syncMessage}
+        </div>
+      )}
+
+      {/* Header Bar */}
       <div className="flex justify-between items-center mb-5">
         <div>
           <div className="flex items-center gap-2">
@@ -360,15 +423,40 @@ export default function App() {
                 isSyncing ? "bg-amber-100 text-amber-700 animate-pulse" : "bg-emerald-100 text-emerald-700"
               }`}
             >
-              {isSyncing ? "Syncing..." : "☁️ Cloud Saved"}
+              {isSyncing ? "Syncing..." : "☁️ Auto-Save Active"}
             </span>
           </div>
-          <p className="text-xs text-slate-500 font-medium">Auto-synced with Cloud Database</p>
+          <p className="text-xs text-slate-500 font-medium">Cloud Database Connected</p>
         </div>
+
         {kametiData && (
-          <button onClick={handleReset} className="bg-red-50 text-red-600 text-xs px-2.5 py-1.5 rounded-lg font-semibold">
-            Reset
-          </button>
+          <div className="flex items-center gap-1.5">
+            {/* Manual Cloud Push Button */}
+            <button
+              onClick={handleManualCloudSync}
+              disabled={isSyncing}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold shadow-sm flex items-center gap-1 active:scale-95"
+              title="Save current data directly to Cloud"
+            >
+              ☁️ Save
+            </button>
+
+            {/* Offline File Backup Button */}
+            <button
+              onClick={exportBackup}
+              className="bg-white border text-xs px-2 py-1.5 rounded-lg shadow-sm font-semibold hover:bg-slate-50"
+              title="Download Backup File"
+            >
+              💾 Backup
+            </button>
+
+            <button
+              onClick={handleReset}
+              className="bg-red-50 text-red-600 text-xs px-2 py-1.5 rounded-lg font-semibold hover:bg-red-100"
+            >
+              Reset
+            </button>
+          </div>
         )}
       </div>
 
@@ -475,6 +563,13 @@ export default function App() {
           >
             {isExistingKameti ? "🚀 Load & Save to Cloud (Month 3)" : "🎲 Draw & Save"}
           </button>
+
+          <div className="pt-2 border-t text-center">
+            <input type="file" ref={fileInputRef} onChange={importBackup} accept=".json" className="hidden" />
+            <button onClick={() => fileInputRef.current.click()} className="text-xs text-indigo-600 font-semibold">
+              Purana Backup (.json) Restore Karein
+            </button>
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
@@ -518,7 +613,7 @@ export default function App() {
                   key={item.turnMonth}
                   onClick={() => {
                     const updated = { ...kametiData, currentMonth: item.turnMonth };
-                    saveToCloudAndLocal(updated);
+                    saveToCloudAndLocal(updated, false);
                   }}
                   className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-all ${
                     kametiData.currentMonth === item.turnMonth
