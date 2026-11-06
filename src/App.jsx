@@ -4,10 +4,15 @@ export default function App() {
   const [kametiName, setKametiName] = useState("");
   const [monthlyAmount, setMonthlyAmount] = useState("");
   const [adminUpi, setAdminUpi] = useState("");
-  const [isExistingKameti, setIsExistingKameti] = useState(true); // Default true for running kameti
+  const [isExistingKameti, setIsExistingKameti] = useState(true);
   const [currentRunningMonth, setCurrentRunningMonth] = useState("3");
   const [dueDate, setDueDate] = useState("10 Nov");
   const [memberSequenceInput, setMemberSequenceInput] = useState("");
+  
+  // Image Receipt Modal State
+  const [receiptModal, setReceiptModal] = useState(null); // { member, month, isPaid, mode, date }
+  const [generatedImgUrl, setGeneratedImgUrl] = useState(null);
+  const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const [kametiData, setKametiData] = useState(() => {
@@ -21,7 +26,7 @@ export default function App() {
     }
   }, [kametiData]);
 
-  // Kameti Setup (New Random OR Already Running Sequence)
+  // Setup Kameti
   const setupKameti = () => {
     const members = memberSequenceInput
       .split("\n")
@@ -34,8 +39,6 @@ export default function App() {
     }
 
     let lineupOrder = [...members];
-
-    // Agar nayi kameti hai to random shuffle karega, ongoing hai to aapke dale huye order me rakhega
     if (!isExistingKameti) {
       for (let i = lineupOrder.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -50,12 +53,10 @@ export default function App() {
 
     const startMonth = isExistingKameti ? Math.min(Number(currentRunningMonth), lineup.length) : 1;
 
-    // Payments setup
     const payments = {};
     for (let m = 1; m <= lineup.length; m++) {
       payments[m] = {};
       members.forEach((mem) => {
-        // Agar running kameti hai aur purana month hai to automatically Paid mark kar dega
         const isPastMonth = isExistingKameti && m < startMonth;
         payments[m][mem] = {
           status: isPastMonth,
@@ -94,6 +95,134 @@ export default function App() {
     }));
   };
 
+  // Canvas Image Drawing Engine
+  const generateSlipImage = (member, month, isPaid, mode, date) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 600;
+    canvas.height = 750;
+    const ctx = canvas.getContext("2d");
+
+    // Background
+    ctx.fillStyle = "#F8FAFC";
+    ctx.fillRect(0, 0, 600, 750);
+
+    // Header Box
+    const headerGrad = ctx.createLinearGradient(0, 0, 600, 0);
+    if (isPaid) {
+      headerGrad.addColorStop(0, "#059669");
+      headerGrad.addColorStop(1, "#10B981");
+    } else {
+      headerGrad.addColorStop(0, "#D97706");
+      headerGrad.addColorStop(1, "#F59E0B");
+    }
+    ctx.fillStyle = headerGrad;
+    ctx.fillRect(0, 0, 600, 160);
+
+    // Header Title
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = "bold 28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(kametiData.name.toUpperCase(), 300, 60);
+
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillText(isPaid ? "✅ OFFICIAL PAYMENT RECEIPT" : "⚠️ KIST DUE REMINDER SLIP", 300, 105);
+
+    ctx.font = "14px sans-serif";
+    ctx.fillText(`Month ${month} of ${kametiData.lineup.length} | Due: ${kametiData.dueDate}`, 300, 135);
+
+    // White Card Body
+    ctx.fillStyle = "#FFFFFF";
+    ctx.beginPath();
+    ctx.roundRect(40, 190, 520, 420, 16);
+    ctx.fill();
+    ctx.strokeStyle = "#E2E8F0";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Body Info Details
+    ctx.textAlign = "left";
+    const drawRow = (label, val, y, isBold = false) => {
+      ctx.fillStyle = "#64748B";
+      ctx.font = "16px sans-serif";
+      ctx.fillText(label, 70, y);
+
+      ctx.fillStyle = "#0F172A";
+      ctx.font = isBold ? "bold 18px sans-serif" : "600 17px sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(val, 530, y);
+      ctx.textAlign = "left";
+
+      ctx.strokeStyle = "#F1F5F9";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(70, y + 15);
+      ctx.lineTo(530, y + 15);
+      ctx.stroke();
+    };
+
+    drawRow("Member Name:", member, 250, true);
+    drawRow("Installment Amount:", `₹${kametiData.amount.toLocaleString("en-IN")}`, 310, true);
+    drawRow("Kameti Month:", `Month ${month}`, 370);
+    drawRow("Status:", isPaid ? "PAID / CLEARED" : "PENDING DUE", 430, true);
+    
+    if (isPaid) {
+      drawRow("Payment Mode:", mode || "Cash", 490);
+      drawRow("Receipt Date:", date || new Date().toLocaleDateString("en-IN"), 550);
+    } else {
+      drawRow("Last Date:", kametiData.dueDate, 490, true);
+      drawRow("UPI ID:", kametiData.adminUpi || "Direct Contact Admin", 550);
+    }
+
+    // Footer
+    ctx.fillStyle = "#94A3B8";
+    ctx.font = "13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Generated automatically via Kameti Pro Web App", 300, 660);
+    ctx.fillText("Please keep this slip for your chit records", 300, 685);
+
+    const imgData = canvas.toDataURL("image/png");
+    setGeneratedImgUrl(imgData);
+    setReceiptModal({ member, month, isPaid, mode, date });
+  };
+
+  // Direct Mobile Share Button
+  const handleShareSlip = async () => {
+    if (!generatedImgUrl) return;
+
+    try {
+      // Convert base64 DataURL to Blob File
+      const res = await fetch(generatedImgUrl);
+      const blob = await res.blob();
+      const file = new File([blob], `${receiptModal.member}_month_${receiptModal.month}_slip.png`, {
+        type: "image/png",
+      });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `${kametiData.name} Slip`,
+          text: receiptModal.isPaid
+            ? `Namaste ${receiptModal.member}, yahan aapki Month ${receiptModal.month} ki payment receipt attach hai.`
+            : `Namaste ${receiptModal.member}, yahan aapki Month ${receiptModal.month} ki kameti installment due slip hai. Last date: ${kametiData.dueDate}.`,
+        });
+      } else {
+        // Fallback for browsers that don't support file sharing
+        const link = document.createElement("a");
+        link.href = generatedImgUrl;
+        link.download = `${receiptModal.member}_slip.png`;
+        link.click();
+        alert("Slip image download ho gayi hai! Aap WhatsApp par attach karke bhej sakte hain.");
+      }
+    } catch (e) {
+      console.error(e);
+      // Direct Download Fallback
+      const link = document.createElement("a");
+      link.href = generatedImgUrl;
+      link.download = `${receiptModal.member}_slip.png`;
+      link.click();
+    }
+  };
+
   // WhatsApp: Send Group Lineup
   const sendLineupToWhatsApp = () => {
     let msg = `🎉 *${kametiData.name} - Lineup & Schedule* 🎉\n`;
@@ -108,7 +237,7 @@ export default function App() {
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
-  // WhatsApp: Monthly Status (10 Nov Payout Special)
+  // WhatsApp: Monthly Group Status
   const sendMonthStatusToWhatsApp = (month) => {
     const winner = kametiData.lineup.find((i) => i.turnMonth === month)?.memberName;
     const monthPayments = kametiData.payments[month];
@@ -139,22 +268,6 @@ export default function App() {
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
-  // WhatsApp: Personal Reminder
-  const sendPersonalWhatsApp = (member, month, isPaid) => {
-    let msg = "";
-    if (isPaid) {
-      msg = `✅ *Receipt - ${kametiData.name}*\n\nNamaste ${member},\nAapki Month ${month} ki kisht (₹${kametiData.amount}) prapt ho chuki hai. Dhanyawad!`;
-    } else {
-      msg = `⚠️ *Kisht Reminder - ${kametiData.name}*\n\nNamaste ${member},\nAapki Month ${month} ki kisht (₹${kametiData.amount}) abhi pending hai.\n`;
-      msg += `⏰ *Last Date:* *${kametiData.dueDate}*\n`;
-      if (kametiData.adminUpi) {
-        msg += `📲 UPI ID: *${kametiData.adminUpi}*\n`;
-        msg += `Pay Link: upi://pay?pa=${kametiData.adminUpi}&pn=${encodeURIComponent(kametiData.name)}&am=${kametiData.amount}&cu=INR`;
-      }
-    }
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, "_blank");
-  };
-
   const exportBackup = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(kametiData));
     const a = document.createElement("a");
@@ -174,7 +287,7 @@ export default function App() {
           alert("Backup restore ho gaya!");
         }
       } catch (err) {
-        alert("Error in file!");
+        alert("Error reading file!");
       }
     };
   };
@@ -185,12 +298,12 @@ export default function App() {
   const collectedAmount = paidCount * (kametiData?.amount || 0);
 
   return (
-    <div className="min-h-screen bg-slate-100 p-3 sm:p-5 max-w-xl mx-auto font-sans text-slate-800 pb-16">
+    <div className="min-h-screen bg-slate-100 p-3 sm:p-5 max-w-xl mx-auto font-sans text-slate-800 pb-20">
       {/* Header */}
       <div className="flex justify-between items-center mb-5">
         <div>
           <h1 className="text-2xl font-black text-indigo-700 tracking-tight">🏦 Kameti Pro</h1>
-          <p className="text-xs text-slate-500 font-medium">Chit Fund & Payout Manager</p>
+          <p className="text-xs text-slate-500 font-medium">Chit Fund & Slip Generator</p>
         </div>
         {kametiData && (
           <div className="flex gap-2">
@@ -199,7 +312,7 @@ export default function App() {
             </button>
             <button
               onClick={() => {
-                if (confirm("Reset karne par data clear ho jayega. Sure hain?")) {
+                if (confirm("Reset karne se sara data erase ho jayega. Sure hain?")) {
                   localStorage.removeItem("kameti_app_pro_data");
                   setKametiData(null);
                 }
@@ -216,7 +329,6 @@ export default function App() {
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
           <h2 className="text-base font-bold text-slate-900 border-b pb-2">Kameti Entry Karein</h2>
 
-          {/* Toggle: Already running vs Fresh new */}
           <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
             <button
               onClick={() => setIsExistingKameti(true)}
@@ -298,7 +410,7 @@ export default function App() {
           <div>
             <label className="text-xs font-bold text-slate-600 uppercase">
               {isExistingKameti
-                ? "Members Sequence Me Daalein (1st line = Month 1 Winner, 2nd line = Month 2, 3rd = Month 3)"
+                ? "Members Sequence Me Daalein (Line 1 = Month 1, Line 2 = Month 2, Line 3 = 10 Nov Payout)"
                 : "Members (Har line me ek naam)"}
             </label>
             <textarea
@@ -308,11 +420,6 @@ export default function App() {
               value={memberSequenceInput}
               onChange={(e) => setMemberSequenceInput(e.target.value)}
             />
-            {isExistingKameti && (
-              <p className="text-[11px] text-amber-600 mt-1 font-medium">
-                💡 Tip: Jiska pehle payout ho chuka hai unka naam pehle daalein, 3rd line par 10 Nov wale ka naam daalein.
-              </p>
-            )}
           </div>
 
           <button
@@ -446,12 +553,15 @@ export default function App() {
                       {pay.status ? "Paid ✓" : "Pending"}
                     </button>
 
+                    {/* Image Receipt / Reminder Generator Button */}
                     <button
-                      onClick={() => sendPersonalWhatsApp(member, kametiData.currentMonth, pay.status)}
-                      className="p-1.5 text-slate-400 hover:text-emerald-600 rounded-lg"
-                      title="Send WhatsApp"
+                      onClick={() =>
+                        generateSlipImage(member, kametiData.currentMonth, pay.status, pay.mode, pay.date)
+                      }
+                      className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold rounded-lg border border-indigo-200 flex items-center gap-1 shadow-sm"
+                      title="Generate Image Slip"
                     >
-                      💬
+                      🖼️ Slip
                     </button>
                   </div>
                 </div>
@@ -464,7 +574,7 @@ export default function App() {
             <div className="flex justify-between items-center mb-3">
               <div>
                 <h3 className="font-bold text-slate-800 text-sm">📅 Full Sequence</h3>
-                <p className="text-[11px] text-slate-500">Kiski kameti kis mahine aayegi</p>
+                <p className="text-[11px] text-slate-500">Draw line order</p>
               </div>
               <button
                 onClick={sendLineupToWhatsApp}
@@ -489,6 +599,48 @@ export default function App() {
                   </span>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Preview & Share Popup Modal */}
+      {receiptModal && generatedImgUrl && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl p-4 max-w-sm w-full space-y-3 shadow-2xl">
+            <div className="flex justify-between items-center border-b pb-2">
+              <h4 className="font-bold text-slate-900 text-sm">
+                {receiptModal.isPaid ? "✅ Payment Receipt Card" : "⚠️ Payment Due Slip"}
+              </h4>
+              <button
+                onClick={() => setReceiptModal(null)}
+                className="text-slate-400 hover:text-slate-700 text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Generated Image Preview */}
+            <div className="border rounded-xl overflow-hidden bg-slate-50 shadow-inner">
+              <img src={generatedImgUrl} alt="Receipt Card" className="w-full h-auto block" />
+            </div>
+
+            {/* Buttons */}
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                onClick={handleShareSlip}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95"
+              >
+                📲 Share to WhatsApp
+              </button>
+
+              <a
+                href={generatedImgUrl}
+                download={`${receiptModal.member}_slip.png`}
+                className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md text-center active:scale-95"
+              >
+                ⬇️ Download PNG
+              </a>
             </div>
           </div>
         </div>
