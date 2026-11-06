@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 
+// ==========================================
+// 🔴 APNI SUPABASE DETAILS YAHAN PASTE KAREIN:
+const SUPABASE_URL = "https://nbitwmhdcqaqbueeoltv.supabase.co"; // Step 3 se Project URL
+const SUPABASE_KEY = "sb_publishable_bk9aAGYfb2on1acUR15dCA_87iL-xyM"; // Step 3 se anon key
+// ==========================================
+
 export default function App() {
   const [kametiName, setKametiName] = useState("");
   const [monthlyAmount, setMonthlyAmount] = useState("");
@@ -8,25 +14,83 @@ export default function App() {
   const [currentRunningMonth, setCurrentRunningMonth] = useState("3");
   const [dueDate, setDueDate] = useState("10 Nov");
   const [memberSequenceInput, setMemberSequenceInput] = useState("");
-  
-  // Image Receipt Modal State
-  const [receiptModal, setReceiptModal] = useState(null); // { member, month, isPaid, mode, date }
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const [receiptModal, setReceiptModal] = useState(null);
   const [generatedImgUrl, setGeneratedImgUrl] = useState(null);
-  const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const [kametiData, setKametiData] = useState(() => {
-    const saved = localStorage.getItem("kameti_app_pro_data");
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [kametiData, setKametiData] = useState(null);
 
+  // 1. App open hone par Supabase Cloud se data load karna
   useEffect(() => {
-    if (kametiData) {
-      localStorage.setItem("kameti_app_pro_data", JSON.stringify(kametiData));
+    async function loadFromCloud() {
+      setIsLoading(true);
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/kameti_data?id=eq.active_kameti&select=*`, {
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+          },
+        });
+        const data = await res.json();
+        if (data && data.length > 0 && data[0].data) {
+          setKametiData(data[0].data);
+        } else {
+          // Fallback to local storage if cloud is blank
+          const local = localStorage.getItem("kameti_app_pro_data");
+          if (local) setKametiData(JSON.parse(local));
+        }
+      } catch (err) {
+        console.error("Cloud load error, using local data", err);
+        const local = localStorage.getItem("kameti_app_pro_data");
+        if (local) setKametiData(JSON.parse(local));
+      } finally {
+        setIsLoading(false);
+      }
     }
-  }, [kametiData]);
 
-  // Setup Kameti
+    if (SUPABASE_URL && !SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
+      loadFromCloud();
+    } else {
+      const local = localStorage.getItem("kameti_app_pro_data");
+      if (local) setKametiData(JSON.parse(local));
+      setIsLoading(false);
+    }
+  }, []);
+
+  // 2. Koi bhi change hote hi Cloud Database me auto-save hona
+  const saveToCloudAndLocal = async (newData) => {
+    setKametiData(newData);
+    localStorage.setItem("kameti_app_pro_data", JSON.stringify(newData));
+
+    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_PROJECT_ID")) return;
+
+    setIsSyncing(true);
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/kameti_data`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates",
+        },
+        body: JSON.stringify({
+          id: "active_kameti",
+          data: newData,
+          updated_at: new Date().toISOString(),
+        }),
+      });
+    } catch (err) {
+      console.error("Cloud sync error:", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Kameti Setup
   const setupKameti = () => {
     const members = memberSequenceInput
       .split("\n")
@@ -66,7 +130,7 @@ export default function App() {
       });
     }
 
-    setKametiData({
+    const newKametiObj = {
       name: kametiName,
       amount: Number(monthlyAmount),
       totalPool: Number(monthlyAmount) * members.length,
@@ -75,16 +139,18 @@ export default function App() {
       lineup,
       payments,
       currentMonth: startMonth,
-    });
+    };
+
+    saveToCloudAndLocal(newKametiObj);
   };
 
   const updatePaymentStatus = (month, member, status, mode = "Cash") => {
-    setKametiData((prev) => ({
-      ...prev,
+    const updated = {
+      ...kametiData,
       payments: {
-        ...prev.payments,
+        ...kametiData.payments,
         [month]: {
-          ...prev.payments[month],
+          ...kametiData.payments[month],
           [member]: {
             status,
             mode,
@@ -92,21 +158,37 @@ export default function App() {
           },
         },
       },
-    }));
+    };
+    saveToCloudAndLocal(updated);
   };
 
-  // Canvas Image Drawing Engine
+  // Reset Cloud and Local
+  const handleReset = async () => {
+    if (confirm("Reset karne par cloud aur local dono jagah se data delete ho jayega. Sure hain?")) {
+      localStorage.removeItem("kameti_app_pro_data");
+      setKametiData(null);
+      if (SUPABASE_URL && !SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
+        await fetch(`${SUPABASE_URL}/rest/v1/kameti_data?id=eq.active_kameti`, {
+          method: "DELETE",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+          },
+        });
+      }
+    }
+  };
+
+  // Canvas Receipt Generator
   const generateSlipImage = (member, month, isPaid, mode, date) => {
     const canvas = document.createElement("canvas");
     canvas.width = 600;
     canvas.height = 750;
     const ctx = canvas.getContext("2d");
 
-    // Background
     ctx.fillStyle = "#F8FAFC";
     ctx.fillRect(0, 0, 600, 750);
 
-    // Header Box
     const headerGrad = ctx.createLinearGradient(0, 0, 600, 0);
     if (isPaid) {
       headerGrad.addColorStop(0, "#059669");
@@ -118,7 +200,6 @@ export default function App() {
     ctx.fillStyle = headerGrad;
     ctx.fillRect(0, 0, 600, 160);
 
-    // Header Title
     ctx.fillStyle = "#FFFFFF";
     ctx.font = "bold 28px sans-serif";
     ctx.textAlign = "center";
@@ -130,7 +211,6 @@ export default function App() {
     ctx.font = "14px sans-serif";
     ctx.fillText(`Month ${month} of ${kametiData.lineup.length} | Due: ${kametiData.dueDate}`, 300, 135);
 
-    // White Card Body
     ctx.fillStyle = "#FFFFFF";
     ctx.beginPath();
     ctx.roundRect(40, 190, 520, 420, 16);
@@ -139,7 +219,6 @@ export default function App() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Body Info Details
     ctx.textAlign = "left";
     const drawRow = (label, val, y, isBold = false) => {
       ctx.fillStyle = "#64748B";
@@ -164,7 +243,7 @@ export default function App() {
     drawRow("Installment Amount:", `₹${kametiData.amount.toLocaleString("en-IN")}`, 310, true);
     drawRow("Kameti Month:", `Month ${month}`, 370);
     drawRow("Status:", isPaid ? "PAID / CLEARED" : "PENDING DUE", 430, true);
-    
+
     if (isPaid) {
       drawRow("Payment Mode:", mode || "Cash", 490);
       drawRow("Receipt Date:", date || new Date().toLocaleDateString("en-IN"), 550);
@@ -173,49 +252,38 @@ export default function App() {
       drawRow("UPI ID:", kametiData.adminUpi || "Direct Contact Admin", 550);
     }
 
-    // Footer
     ctx.fillStyle = "#94A3B8";
     ctx.font = "13px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("Generated automatically via Kameti Pro Web App", 300, 660);
-    ctx.fillText("Please keep this slip for your chit records", 300, 685);
+    ctx.fillText("Generated automatically via Kameti Pro Cloud App", 300, 660);
 
     const imgData = canvas.toDataURL("image/png");
     setGeneratedImgUrl(imgData);
     setReceiptModal({ member, month, isPaid, mode, date });
   };
 
-  // Direct Mobile Share Button
   const handleShareSlip = async () => {
     if (!generatedImgUrl) return;
-
     try {
-      // Convert base64 DataURL to Blob File
       const res = await fetch(generatedImgUrl);
       const blob = await res.blob();
-      const file = new File([blob], `${receiptModal.member}_month_${receiptModal.month}_slip.png`, {
-        type: "image/png",
-      });
+      const file = new File([blob], `${receiptModal.member}_slip.png`, { type: "image/png" });
 
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
           title: `${kametiData.name} Slip`,
           text: receiptModal.isPaid
-            ? `Namaste ${receiptModal.member}, yahan aapki Month ${receiptModal.month} ki payment receipt attach hai.`
-            : `Namaste ${receiptModal.member}, yahan aapki Month ${receiptModal.month} ki kameti installment due slip hai. Last date: ${kametiData.dueDate}.`,
+            ? `Namaste ${receiptModal.member}, Month ${receiptModal.month} ki payment receipt attach hai.`
+            : `Namaste ${receiptModal.member}, Month ${receiptModal.month} ki kameti installment due slip hai. Last date: ${kametiData.dueDate}.`,
         });
       } else {
-        // Fallback for browsers that don't support file sharing
         const link = document.createElement("a");
         link.href = generatedImgUrl;
         link.download = `${receiptModal.member}_slip.png`;
         link.click();
-        alert("Slip image download ho gayi hai! Aap WhatsApp par attach karke bhej sakte hain.");
       }
     } catch (e) {
-      console.error(e);
-      // Direct Download Fallback
       const link = document.createElement("a");
       link.href = generatedImgUrl;
       link.download = `${receiptModal.member}_slip.png`;
@@ -223,21 +291,6 @@ export default function App() {
     }
   };
 
-  // WhatsApp: Send Group Lineup
-  const sendLineupToWhatsApp = () => {
-    let msg = `🎉 *${kametiData.name} - Lineup & Schedule* 🎉\n`;
-    msg += `💰 Kisht: ₹${kametiData.amount} | Pool: ₹${kametiData.totalPool}\n`;
-    msg += `📅 Due Date: *Har mahine ki ${kametiData.dueDate}*\n`;
-    if (kametiData.adminUpi) msg += `📲 UPI: ${kametiData.adminUpi}\n`;
-    msg += `\n*Lineup Order:*\n`;
-    kametiData.lineup.forEach((item) => {
-      const isCurrent = item.turnMonth === kametiData.currentMonth ? " 👈 (Running Now)" : "";
-      msg += `Month ${item.turnMonth}: *${item.memberName}*${isCurrent}\n`;
-    });
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, "_blank");
-  };
-
-  // WhatsApp: Monthly Group Status
   const sendMonthStatusToWhatsApp = (month) => {
     const winner = kametiData.lineup.find((i) => i.turnMonth === month)?.memberName;
     const monthPayments = kametiData.payments[month];
@@ -268,28 +321,15 @@ export default function App() {
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
-  const exportBackup = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(kametiData));
-    const a = document.createElement("a");
-    a.href = dataStr;
-    a.download = `${kametiData.name.replace(/\s+/g, "_")}_backup.json`;
-    a.click();
-  };
-
-  const importBackup = (e) => {
-    const reader = new FileReader();
-    reader.readAsText(e.target.files[0], "UTF-8");
-    reader.onload = (event) => {
-      try {
-        const parsed = JSON.parse(event.target.result);
-        if (parsed.lineup && parsed.payments) {
-          setKametiData(parsed);
-          alert("Backup restore ho gaya!");
-        }
-      } catch (err) {
-        alert("Error reading file!");
-      }
-    };
+  const sendLineupToWhatsApp = () => {
+    let msg = `🎉 *${kametiData.name} - Full Lineup* 🎉\n`;
+    msg += `💰 Kisht: ₹${kametiData.amount} | Pool: ₹${kametiData.totalPool}\n`;
+    msg += `📅 Due Date: *Har mahine ki ${kametiData.dueDate}*\n\n`;
+    kametiData.lineup.forEach((item) => {
+      const isCur = item.turnMonth === kametiData.currentMonth ? " 👈 (Running Now)" : "";
+      msg += `Month ${item.turnMonth}: *${item.memberName}*${isCur}\n`;
+    });
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
   const currentMonthData = kametiData?.payments[kametiData?.currentMonth] || {};
@@ -297,31 +337,38 @@ export default function App() {
   const totalCount = kametiData?.lineup?.length || 0;
   const collectedAmount = paidCount * (kametiData?.amount || 0);
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100 font-sans">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+          <p className="text-sm font-bold text-slate-600">Cloud Data Load Ho Raha Hai...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 p-3 sm:p-5 max-w-xl mx-auto font-sans text-slate-800 pb-20">
       {/* Header */}
       <div className="flex justify-between items-center mb-5">
         <div>
-          <h1 className="text-2xl font-black text-indigo-700 tracking-tight">🏦 Kameti Pro</h1>
-          <p className="text-xs text-slate-500 font-medium">Chit Fund & Slip Generator</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-indigo-700 tracking-tight">🏦 Kameti Pro</h1>
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                isSyncing ? "bg-amber-100 text-amber-700 animate-pulse" : "bg-emerald-100 text-emerald-700"
+              }`}
+            >
+              {isSyncing ? "Syncing..." : "☁️ Cloud Saved"}
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 font-medium">Auto-synced with Cloud Database</p>
         </div>
         {kametiData && (
-          <div className="flex gap-2">
-            <button onClick={exportBackup} className="bg-white border text-xs px-2.5 py-1.5 rounded-lg shadow-sm font-semibold">
-              💾 Backup
-            </button>
-            <button
-              onClick={() => {
-                if (confirm("Reset karne se sara data erase ho jayega. Sure hain?")) {
-                  localStorage.removeItem("kameti_app_pro_data");
-                  setKametiData(null);
-                }
-              }}
-              className="bg-red-50 text-red-600 text-xs px-2.5 py-1.5 rounded-lg font-semibold"
-            >
-              Reset
-            </button>
-          </div>
+          <button onClick={handleReset} className="bg-red-50 text-red-600 text-xs px-2.5 py-1.5 rounded-lg font-semibold">
+            Reset
+          </button>
         )}
       </div>
 
@@ -426,15 +473,8 @@ export default function App() {
             onClick={setupKameti}
             className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-md"
           >
-            {isExistingKameti ? "🚀 Load Running Kameti (Month 3)" : "🎲 Draw & Start"}
+            {isExistingKameti ? "🚀 Load & Save to Cloud (Month 3)" : "🎲 Draw & Save"}
           </button>
-
-          <div className="pt-2 border-t text-center">
-            <input type="file" ref={fileInputRef} onChange={importBackup} accept=".json" className="hidden" />
-            <button onClick={() => fileInputRef.current.click()} className="text-xs text-indigo-600 font-semibold">
-              Purana Backup (.json) Restore Karein
-            </button>
-          </div>
         </div>
       ) : (
         <div className="space-y-4">
@@ -453,7 +493,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Collection Progress */}
             <div className="mt-4 pt-3 border-t border-indigo-600/50">
               <div className="flex justify-between text-xs font-semibold mb-1">
                 <span>Month {kametiData.currentMonth} Collected:</span>
@@ -477,7 +516,10 @@ export default function App() {
               return (
                 <button
                   key={item.turnMonth}
-                  onClick={() => setKametiData({ ...kametiData, currentMonth: item.turnMonth })}
+                  onClick={() => {
+                    const updated = { ...kametiData, currentMonth: item.turnMonth };
+                    saveToCloudAndLocal(updated);
+                  }}
                   className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-all ${
                     kametiData.currentMonth === item.turnMonth
                       ? "bg-slate-900 text-white border-slate-900"
@@ -553,13 +595,11 @@ export default function App() {
                       {pay.status ? "Paid ✓" : "Pending"}
                     </button>
 
-                    {/* Image Receipt / Reminder Generator Button */}
                     <button
                       onClick={() =>
                         generateSlipImage(member, kametiData.currentMonth, pay.status, pay.mode, pay.date)
                       }
                       className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold rounded-lg border border-indigo-200 flex items-center gap-1 shadow-sm"
-                      title="Generate Image Slip"
                     >
                       🖼️ Slip
                     </button>
@@ -604,40 +644,32 @@ export default function App() {
         </div>
       )}
 
-      {/* Image Preview & Share Popup Modal */}
+      {/* Slip Modal */}
       {receiptModal && generatedImgUrl && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-4 max-w-sm w-full space-y-3 shadow-2xl">
             <div className="flex justify-between items-center border-b pb-2">
               <h4 className="font-bold text-slate-900 text-sm">
                 {receiptModal.isPaid ? "✅ Payment Receipt Card" : "⚠️ Payment Due Slip"}
               </h4>
-              <button
-                onClick={() => setReceiptModal(null)}
-                className="text-slate-400 hover:text-slate-700 text-lg font-bold"
-              >
+              <button onClick={() => setReceiptModal(null)} className="text-slate-400 font-bold">
                 ✕
               </button>
             </div>
-
-            {/* Generated Image Preview */}
-            <div className="border rounded-xl overflow-hidden bg-slate-50 shadow-inner">
-              <img src={generatedImgUrl} alt="Receipt Card" className="w-full h-auto block" />
+            <div className="border rounded-xl overflow-hidden bg-slate-50">
+              <img src={generatedImgUrl} alt="Slip" className="w-full h-auto block" />
             </div>
-
-            {/* Buttons */}
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button
                 onClick={handleShareSlip}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md"
               >
                 📲 Share to WhatsApp
               </button>
-
               <a
                 href={generatedImgUrl}
                 download={`${receiptModal.member}_slip.png`}
-                className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md text-center active:scale-95"
+                className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 text-center shadow-md"
               >
                 ⬇️ Download PNG
               </a>
