@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 
 // ==========================================
-// 🔴 APNI SUPABASE DETAILS VERIFY KAREIN:
+// 🔴 APNI SUPABASE DETAILS:
 const SUPABASE_URL = "https://nbitwmhdcqaqbueeoltv.supabase.co"; 
 const SUPABASE_KEY = "sb_publishable_bk9aAGYfb2on1acUR15dCA_87iL-xyM"; 
 // ==========================================
@@ -9,11 +9,16 @@ const SUPABASE_KEY = "sb_publishable_bk9aAGYfb2on1acUR15dCA_87iL-xyM";
 export default function App() {
   const isMemberView = new URLSearchParams(window.location.search).get("view") === "member";
 
+  // Navigation: 'active' (kameti chal rahi hai) ya 'list' (kameti switch ya new create karne ke liye)
+  const [currentView, setCurrentView] = useState("active"); 
+  const [allKametis, setAllKametis] = useState([]); // List of all kametis in cloud
+
+  // Form states for setup
   const [kametiName, setKametiName] = useState("");
   const [monthlyAmount, setMonthlyAmount] = useState("");
   const [adminUpi, setAdminUpi] = useState("");
-  const [dueDay, setDueDay] = useState("10"); // Default day: 10th
-  const [startMonthYear, setStartMonthYear] = useState("2026-09"); // CGC 2000 Month 1 was Sept 2026
+  const [dueDay, setDueDay] = useState("10");
+  const [startMonthYear, setStartMonthYear] = useState("2026-09");
   const [isExistingKameti, setIsExistingKameti] = useState(true);
   const [currentRunningMonth, setCurrentRunningMonth] = useState("3");
   const [memberSequenceInput, setMemberSequenceInput] = useState("");
@@ -33,13 +38,12 @@ export default function App() {
     setTimeout(() => setSyncMessage(""), 3500);
   };
 
-  // Har month ki dynamic date nikaalne ka function
+  // Har month ki dynamic date calculate karna
   const getDynamicDueDate = (turnMonth) => {
     const startStr = kametiData?.startMonthYear || "2026-09";
     const [year, month] = startStr.split("-").map(Number);
     const day = kametiData?.dueDay || "10";
 
-    // turnMonth 1 = September 2026
     const targetDate = new Date(year, month - 1 + (turnMonth - 1), Number(day));
     return targetDate.toLocaleDateString("en-IN", {
       day: "numeric",
@@ -48,50 +52,87 @@ export default function App() {
     });
   };
 
-  // 1. Cloud load
-  useEffect(() => {
-    async function loadFromCloud() {
-      setIsLoading(true);
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/kameti_data?id=eq.active_kameti&select=*`, {
-          headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-          },
-        });
-        const data = await res.json();
-        if (data && data.length > 0 && data[0].data) {
-          setKametiData(data[0].data);
-          localStorage.setItem("kameti_app_pro_data", JSON.stringify(data[0].data));
-        } else {
-          const local = localStorage.getItem("kameti_app_pro_data");
-          if (local) setKametiData(JSON.parse(local));
-        }
-      } catch (err) {
-        console.error("Cloud load error:", err);
-        const local = localStorage.getItem("kameti_app_pro_data");
-        if (local) setKametiData(JSON.parse(local));
-      } finally {
-        setIsLoading(false);
-      }
-    }
+  // 1. Cloud se saari kametis load karna
+  const fetchAllKametisFromCloud = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/kameti_data?select=*`, {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+      });
+      const data = await res.json();
+      if (data && Array.isArray(data) && data.length > 0) {
+        const kametisList = data.map((item) => ({ id: item.id, ...item.data }));
+        setAllKametis(kametisList);
 
+        // Saved active id check karein
+        const lastActiveId = localStorage.getItem("last_active_kameti_id");
+        const selected = kametisList.find((k) => k.id === lastActiveId) || kametisList[0];
+        setKametiData(selected);
+        setCurrentView("active");
+      } else {
+        // Fallback to local
+        const local = localStorage.getItem("kameti_app_pro_data");
+        if (local) {
+          const parsed = JSON.parse(local);
+          setKametiData(parsed);
+          setAllKametis([parsed]);
+          setCurrentView("active");
+        } else {
+          setCurrentView("list");
+        }
+      }
+    } catch (err) {
+      console.error("Cloud load error:", err);
+      const local = localStorage.getItem("kameti_app_pro_data");
+      if (local) {
+        const parsed = JSON.parse(local);
+        setKametiData(parsed);
+        setAllKametis([parsed]);
+        setCurrentView("active");
+      } else {
+        setCurrentView("list");
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
     if (SUPABASE_URL && !SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
-      loadFromCloud();
+      fetchAllKametisFromCloud();
     } else {
       const local = localStorage.getItem("kameti_app_pro_data");
-      if (local) setKametiData(JSON.parse(local));
+      if (local) {
+        const parsed = JSON.parse(local);
+        setKametiData(parsed);
+        setAllKametis([parsed]);
+      }
       setIsLoading(false);
     }
   }, []);
 
-  // 2. Cloud save
+  // 2. Cloud Save (Multi-Kameti Support ke sath)
   const saveToCloudAndLocal = async (newData, manualTrigger = false) => {
     setKametiData(newData);
     localStorage.setItem("kameti_app_pro_data", JSON.stringify(newData));
+    localStorage.setItem("last_active_kameti_id", newData.id);
+
+    // Update state list
+    setAllKametis((prev) => {
+      const index = prev.findIndex((k) => k.id === newData.id);
+      if (index >= 0) {
+        const updatedList = [...prev];
+        updatedList[index] = newData;
+        return updatedList;
+      }
+      return [...prev, newData];
+    });
 
     if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
-      if (manualTrigger) showBanner("⚠️ Supabase keys check karein");
+      if (manualTrigger) showBanner("⚠️ Supabase Keys check karein");
       return;
     }
 
@@ -106,7 +147,7 @@ export default function App() {
           Prefer: "resolution=merge-duplicates",
         },
         body: JSON.stringify({
-          id: "active_kameti",
+          id: newData.id,
           data: newData,
           updated_at: new Date().toISOString(),
         }),
@@ -124,7 +165,7 @@ export default function App() {
     }
   };
 
-  // Setup Kameti
+  // Nayi Kameti Setup
   const setupKameti = () => {
     const members = memberSequenceInput
       .split("\n")
@@ -165,7 +206,11 @@ export default function App() {
       });
     }
 
+    // Unique Kameti ID generate karna
+    const kametiId = kametiName.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + Date.now().toString().slice(-4);
+
     const newKametiObj = {
+      id: kametiId,
       name: kametiName,
       amount: Number(monthlyAmount),
       totalPool: Number(monthlyAmount) * members.length,
@@ -178,8 +223,15 @@ export default function App() {
     };
 
     saveToCloudAndLocal(newKametiObj, true);
+    setCurrentView("active");
+
+    // Clear form inputs
+    setKametiName("");
+    setMonthlyAmount("");
+    setMemberSequenceInput("");
   };
 
+  // Payment update
   const updatePaymentStatus = (month, member, status, mode = "Cash") => {
     if (isMemberView) return;
     const currentMemberData = kametiData.payments[month][member] || {};
@@ -201,11 +253,11 @@ export default function App() {
     saveToCloudAndLocal(updated, false);
   };
 
-  // Penalty Toggle (+₹100 Late Fee)
+  // Late Fine: Flat ₹50 Toggle
   const togglePenalty = (month, member) => {
     if (isMemberView) return;
     const currentMemberData = kametiData.payments[month][member] || {};
-    const newPenalty = currentMemberData.penalty ? 0 : 100;
+    const newPenalty = currentMemberData.penalty ? 0 : 50; // Flat ₹50 late fee
     const updated = {
       ...kametiData,
       payments: {
@@ -222,6 +274,42 @@ export default function App() {
     saveToCloudAndLocal(updated, false);
   };
 
+  // Switch between Kametis
+  const switchKameti = (kameti) => {
+    setKametiData(kameti);
+    localStorage.setItem("last_active_kameti_id", kameti.id);
+    setCurrentView("active");
+  };
+
+  // Delete specific Kameti
+  const deleteKameti = async (id, name) => {
+    if (confirm(`Kya aap "${name}" ko delete karna chahte hain?`)) {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/kameti_data?id=eq.${id}`, {
+          method: "DELETE",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+          },
+        });
+      } catch (e) {
+        console.error(e);
+      }
+      const updatedList = allKametis.filter((k) => k.id !== id);
+      setAllKametis(updatedList);
+      if (kametiData?.id === id) {
+        if (updatedList.length > 0) {
+          switchKameti(updatedList[0]);
+        } else {
+          setKametiData(null);
+          localStorage.removeItem("kameti_app_pro_data");
+          setCurrentView("list");
+        }
+      }
+      showBanner("Kameti delete ho gayi!");
+    }
+  };
+
   // Canvas Card Image with Live UPI QR
   const generateSlipImage = (member, month, isPaid, mode, date, penalty = 0) => {
     const canvas = document.createElement("canvas");
@@ -231,11 +319,9 @@ export default function App() {
     const currentMonthDueDate = getDynamicDueDate(month);
     const finalAmount = kametiData.amount + penalty;
 
-    // Background
     ctx.fillStyle = "#F8FAFC";
     ctx.fillRect(0, 0, 600, 840);
 
-    // Header Gradient
     const headerGrad = ctx.createLinearGradient(0, 0, 600, 0);
     if (isPaid) {
       headerGrad.addColorStop(0, "#059669");
@@ -258,7 +344,6 @@ export default function App() {
     ctx.font = "14px sans-serif";
     ctx.fillText(`Month ${month} of ${kametiData.lineup.length} | Due: ${currentMonthDueDate}`, 300, 130);
 
-    // White Card
     ctx.fillStyle = "#FFFFFF";
     ctx.beginPath();
     ctx.roundRect(40, 180, 520, isPaid ? 430 : 610, 16);
@@ -290,7 +375,7 @@ export default function App() {
     drawRow("Member Name:", member, 230, true);
     drawRow("Kisht Amount:", `₹${kametiData.amount.toLocaleString("en-IN")}`, 280, true);
     if (penalty > 0) {
-      drawRow("Late Fee / Penalty:", `+₹${penalty}`, 330, true, "#DC2626");
+      drawRow("Late Fine:", `+₹${penalty}`, 330, true, "#DC2626");
       drawRow("Total Payable:", `₹${finalAmount.toLocaleString("en-IN")}`, 380, true, "#1E3A8A");
     }
     const currentOffset = penalty > 0 ? 100 : 0;
@@ -311,7 +396,6 @@ export default function App() {
       drawRow("Due Date:", currentMonthDueDate, 430 + currentOffset, true, "#B45309");
       drawRow("Pay UPI ID:", kametiData.adminUpi || "Direct Contact Admin", 480 + currentOffset);
 
-      // Draw QR Code on Reminder
       if (kametiData.adminUpi) {
         const upiPayString = `upi://pay?pa=${kametiData.adminUpi}&pn=${encodeURIComponent(kametiData.name)}&am=${finalAmount}&cu=INR`;
         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(upiPayString)}`;
@@ -374,7 +458,7 @@ export default function App() {
 
     Object.entries(monthPayments).forEach(([name, data]) => {
       if (data.status) paidList.push(`${name} (${data.mode})`);
-      else pendingList.push(data.penalty ? `${name} (Late Fee: +₹${data.penalty})` : name);
+      else pendingList.push(data.penalty ? `${name} (Late Fine: +₹${data.penalty})` : name);
     });
 
     let msg = `📢 *${kametiData.name} - Month ${month} Update*\n`;
@@ -455,145 +539,202 @@ export default function App() {
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-500 font-medium">Automatic Due Dates & QR Integration</p>
+          <p className="text-xs text-slate-500 font-medium">Multi-Kameti & Auto Due Dates</p>
         </div>
 
-        {kametiData && !isMemberView && (
+        {/* Back / Switch Kameti Button */}
+        {!isMemberView && (
           <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => saveToCloudAndLocal(kametiData, true)}
-              disabled={isSyncing}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold shadow-sm"
-              title="Save to Cloud"
-            >
-              ☁️ Save
-            </button>
-            <button
-              onClick={copyMemberViewLink}
-              className="bg-white border text-xs px-2.5 py-1.5 rounded-lg shadow-sm font-semibold hover:bg-slate-50"
-              title="Copy Member Link"
-            >
-              🔗 Share
-            </button>
+            {currentView === "active" ? (
+              <button
+                onClick={() => setCurrentView("list")}
+                className="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs px-2.5 py-1.5 rounded-lg font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100 transition-all"
+                title="Switch ya New Kameti"
+              >
+                📂 Kameti List ({allKametis.length})
+              </button>
+            ) : (
+              kametiData && (
+                <button
+                  onClick={() => setCurrentView("active")}
+                  className="bg-slate-800 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold shadow-sm"
+                >
+                  ← Back to Kameti
+                </button>
+              )
+            )}
           </div>
         )}
       </div>
 
-      {!kametiData ? (
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-          <h2 className="text-base font-bold text-slate-900 border-b pb-2">Kameti Setup</h2>
+      {/* ========================================================= */}
+      {/* VIEW 1: KAMETI LIST & NEW KAMETI CREATION SCREEN          */}
+      {/* ========================================================= */}
+      {currentView === "list" ? (
+        <div className="space-y-5">
+          {/* List of active kametis */}
+          {allKametis.length > 0 && (
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+              <h3 className="font-bold text-slate-800 text-sm mb-3">📂 Aapki Running Kametis</h3>
+              <div className="space-y-2">
+                {allKametis.map((k) => (
+                  <div
+                    key={k.id}
+                    className="flex justify-between items-center p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50/50 transition-colors"
+                  >
+                    <div className="cursor-pointer flex-1" onClick={() => switchKameti(k)}>
+                      <h4 className="font-bold text-indigo-900 text-sm">{k.name}</h4>
+                      <p className="text-xs text-slate-500">
+                        ₹{k.amount} / member • Pool: ₹{k.totalPool} • {k.lineup?.length} Members
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => switchKameti(k)}
+                        className="bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-lg font-semibold hover:bg-indigo-700"
+                      >
+                        Open →
+                      </button>
+                      <button
+                        onClick={() => deleteKameti(k.id, k.name)}
+                        className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg text-xs"
+                        title="Delete this Kameti"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-          <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-            <button
-              onClick={() => setIsExistingKameti(true)}
-              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
-              }`}
-            >
-              ⚡ Pehle Se Chal Rahi Hai
-            </button>
-            <button
-              onClick={() => setIsExistingKameti(false)}
-              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                !isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
-              }`}
-            >
-              🎲 Nayi Kameti
-            </button>
-          </div>
+          {/* Form to create another new Kameti */}
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <div className="flex justify-between items-center border-b pb-2">
+              <h2 className="text-base font-bold text-slate-900">➕ Nayi Kameti Add Karein</h2>
+              {kametiData && (
+                <button onClick={() => setCurrentView("active")} className="text-xs font-semibold text-indigo-600">
+                  Cancel
+                </button>
+              )}
+            </div>
 
-          <div>
-            <label className="text-xs font-bold text-slate-600 uppercase">Kameti Name</label>
-            <input
-              type="text"
-              placeholder="e.g. CGC 2000 Kameti"
-              className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-              value={kametiName}
-              onChange={(e) => setKametiName(e.target.value)}
-            />
-          </div>
+            <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+              <button
+                onClick={() => setIsExistingKameti(true)}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
+                }`}
+              >
+                ⚡ Pehle Se Chal Rahi Hai
+              </button>
+              <button
+                onClick={() => setIsExistingKameti(false)}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  !isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
+                }`}
+              >
+                🎲 Nayi Kameti
+              </button>
+            </div>
 
-          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-bold text-slate-600 uppercase">Monthly Kisht (₹)</label>
+              <label className="text-xs font-bold text-slate-600 uppercase">Kameti Name</label>
               <input
-                type="number"
-                placeholder="2000"
+                type="text"
+                placeholder="e.g. Friends 50k Kameti"
                 className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-                value={monthlyAmount}
-                onChange={(e) => setMonthlyAmount(e.target.value)}
+                value={kametiName}
+                onChange={(e) => setKametiName(e.target.value)}
               />
             </div>
-            <div>
-              <label className="text-xs font-bold text-slate-600 uppercase">Har Mahine Ki Tareekh</label>
-              <input
-                type="number"
-                placeholder="10"
-                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-                value={dueDay}
-                onChange={(e) => setDueDay(e.target.value)}
-              />
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-bold text-slate-600 uppercase">Start Month (Month 1)</label>
-              <input
-                type="month"
-                className="w-full border p-2 rounded-xl mt-1 text-sm outline-none font-semibold text-slate-700"
-                value={startMonthYear}
-                onChange={(e) => setStartMonthYear(e.target.value)}
-              />
-            </div>
-            {isExistingKameti && (
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-bold text-slate-600 uppercase">Abhi Konsa Month Hai?</label>
+                <label className="text-xs font-bold text-slate-600 uppercase">Monthly Kisht (₹)</label>
                 <input
                   type="number"
-                  placeholder="3"
-                  className="w-full border p-2.5 rounded-xl mt-1 text-sm font-bold text-indigo-700 outline-none"
-                  value={currentRunningMonth}
-                  onChange={(e) => setCurrentRunningMonth(e.target.value)}
+                  placeholder="5000"
+                  className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                  value={monthlyAmount}
+                  onChange={(e) => setMonthlyAmount(e.target.value)}
                 />
               </div>
-            )}
-          </div>
+              <div>
+                <label className="text-xs font-bold text-slate-600 uppercase">Har Mahine Ki Tareekh</label>
+                <input
+                  type="number"
+                  placeholder="10"
+                  className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                  value={dueDay}
+                  onChange={(e) => setDueDay(e.target.value)}
+                />
+              </div>
+            </div>
 
-          <div>
-            <label className="text-xs font-bold text-slate-600 uppercase">Admin UPI ID (QR ke liye)</label>
-            <input
-              type="text"
-              placeholder="e.g. mobile@upi"
-              className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-              value={adminUpi}
-              onChange={(e) => setAdminUpi(e.target.value)}
-            />
-          </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-600 uppercase">Start Month (Month 1)</label>
+                <input
+                  type="month"
+                  className="w-full border p-2 rounded-xl mt-1 text-sm outline-none font-semibold text-slate-700"
+                  value={startMonthYear}
+                  onChange={(e) => setStartMonthYear(e.target.value)}
+                />
+              </div>
+              {isExistingKameti && (
+                <div>
+                  <label className="text-xs font-bold text-slate-600 uppercase">Abhi Konsa Month Hai?</label>
+                  <input
+                    type="number"
+                    placeholder="3"
+                    className="w-full border p-2.5 rounded-xl mt-1 text-sm font-bold text-indigo-700 outline-none"
+                    value={currentRunningMonth}
+                    onChange={(e) => setCurrentRunningMonth(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
 
-          <div>
-            <label className="text-xs font-bold text-slate-600 uppercase">
-              {isExistingKameti
-                ? "Members Lineup (Line 1 = Month 1, Line 2 = Month 2, Line 3 = Month 3 Payout)"
-                : "Members (Har line me ek naam)"}
-            </label>
-            <textarea
-              rows="6"
-              placeholder="1st Winner Name&#10;2nd Winner Name&#10;3rd Winner Name&#10;4th Member"
-              className="w-full border p-2.5 rounded-xl mt-1 text-sm font-mono outline-none"
-              value={memberSequenceInput}
-              onChange={(e) => setMemberSequenceInput(e.target.value)}
-            />
-          </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">Admin UPI ID (QR ke liye)</label>
+              <input
+                type="text"
+                placeholder="e.g. mobile@upi"
+                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                value={adminUpi}
+                onChange={(e) => setAdminUpi(e.target.value)}
+              />
+            </div>
 
-          <button
-            onClick={setupKameti}
-            className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-md"
-          >
-            {isExistingKameti ? "🚀 Load & Save to Cloud" : "🎲 Draw & Save"}
-          </button>
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">
+                {isExistingKameti
+                  ? "Members Lineup (Line 1 = Month 1, Line 2 = Month 2, Line 3 = Month 3 Payout)"
+                  : "Members (Har line me ek naam)"}
+              </label>
+              <textarea
+                rows="6"
+                placeholder="1st Winner Name&#10;2nd Winner Name&#10;3rd Winner Name&#10;4th Member"
+                className="w-full border p-2.5 rounded-xl mt-1 text-sm font-mono outline-none"
+                value={memberSequenceInput}
+                onChange={(e) => setMemberSequenceInput(e.target.value)}
+              />
+            </div>
+
+            <button
+              onClick={setupKameti}
+              className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-md"
+            >
+              {isExistingKameti ? "🚀 Load & Save to Cloud" : "🎲 Draw & Save to Cloud"}
+            </button>
+          </div>
         </div>
       ) : (
+        /* ========================================================= */
+        /* VIEW 2: ACTIVE KAMETI DASHBOARD                           */
+        /* ========================================================= */
         <div className="space-y-4">
           {/* Header Card */}
           <div className="bg-indigo-700 text-white p-4 rounded-2xl shadow-md">
@@ -662,12 +803,23 @@ export default function App() {
                   🎁 {kametiData.lineup.find((i) => i.turnMonth === kametiData.currentMonth)?.memberName}
                 </h3>
               </div>
-              <button
-                onClick={() => sendMonthStatusToWhatsApp(kametiData.currentMonth)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 shadow-sm"
-              >
-                📲 Group Update
-              </button>
+              <div className="flex gap-1.5">
+                {!isMemberView && (
+                  <button
+                    onClick={copyMemberViewLink}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-2.5 py-1.5 rounded-lg font-bold border"
+                    title="Copy Read-Only Link for Members"
+                  >
+                    🔗 Link
+                  </button>
+                )}
+                <button
+                  onClick={() => sendMonthStatusToWhatsApp(kametiData.currentMonth)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 shadow-sm"
+                >
+                  📲 Group Update
+                </button>
+              </div>
             </div>
 
             {/* Checklist */}
@@ -685,7 +837,7 @@ export default function App() {
                       )}
                       {pay.penalty > 0 && (
                         <span className="bg-red-50 text-red-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-red-200">
-                          Late: +₹{pay.penalty}
+                          Fine: +₹{pay.penalty}
                         </span>
                       )}
                     </div>
@@ -694,16 +846,18 @@ export default function App() {
                   <div className="flex items-center gap-1.5">
                     {!isMemberView && (
                       <>
-                        {/* Penalty Toggle */}
+                        {/* Flat ₹50 Fine Toggle */}
                         {!pay.status && (
                           <button
                             onClick={() => togglePenalty(kametiData.currentMonth, member)}
-                            className={`text-[11px] px-2 py-1 rounded font-bold border ${
-                              pay.penalty > 0 ? "bg-red-600 text-white border-red-600" : "bg-slate-50 text-slate-500"
+                            className={`text-[11px] px-2 py-1 rounded font-bold border transition-all ${
+                              pay.penalty > 0
+                                ? "bg-red-600 text-white border-red-600"
+                                : "bg-slate-50 text-slate-600 hover:bg-red-50"
                             }`}
-                            title="Toggle ₹100 Late Fee"
+                            title="Toggle ₹50 Late Fine"
                           >
-                            +₹100
+                            +₹50
                           </button>
                         )}
 
