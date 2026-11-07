@@ -9,11 +9,13 @@ const SUPABASE_KEY = "sb_publishable_bk9aAGYfb2on1acUR15dCA_87iL-xyM";
 export default function App() {
   const isMemberView = new URLSearchParams(window.location.search).get("view") === "member";
 
-  // Navigation: 'active' (kameti chal rahi hai) ya 'list' (kameti switch ya new create karne ke liye)
-  const [currentView, setCurrentView] = useState("active"); 
-  const [allKametis, setAllKametis] = useState([]); // List of all kametis in cloud
+  // Navigation states
+  const [currentView, setCurrentView] = useState("active"); // 'active' | 'create'
+  const [allKametis, setAllKametis] = useState([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
-  // Form states for setup
+  // Setup form states
   const [kametiName, setKametiName] = useState("");
   const [monthlyAmount, setMonthlyAmount] = useState("");
   const [adminUpi, setAdminUpi] = useState("");
@@ -22,6 +24,10 @@ export default function App() {
   const [isExistingKameti, setIsExistingKameti] = useState(true);
   const [currentRunningMonth, setCurrentRunningMonth] = useState("3");
   const [memberSequenceInput, setMemberSequenceInput] = useState("");
+
+  // Settings Edit states
+  const [editUpi, setEditUpi] = useState("");
+  const [editDueDay, setEditDueDay] = useState("10");
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -38,7 +44,7 @@ export default function App() {
     setTimeout(() => setSyncMessage(""), 3500);
   };
 
-  // Har month ki dynamic date calculate karna
+  // Dynamic Date calculation
   const getDynamicDueDate = (turnMonth) => {
     const startStr = kametiData?.startMonthYear || "2026-09";
     const [year, month] = startStr.split("-").map(Number);
@@ -52,7 +58,7 @@ export default function App() {
     });
   };
 
-  // 1. Cloud se saari kametis load karna
+  // 1. Fetch all Kametis from Cloud
   const fetchAllKametisFromCloud = async () => {
     setIsLoading(true);
     try {
@@ -67,21 +73,23 @@ export default function App() {
         const kametisList = data.map((item) => ({ id: item.id, ...item.data }));
         setAllKametis(kametisList);
 
-        // Saved active id check karein
         const lastActiveId = localStorage.getItem("last_active_kameti_id");
         const selected = kametisList.find((k) => k.id === lastActiveId) || kametisList[0];
         setKametiData(selected);
+        setEditUpi(selected.adminUpi || "");
+        setEditDueDay(selected.dueDay || "10");
         setCurrentView("active");
       } else {
-        // Fallback to local
         const local = localStorage.getItem("kameti_app_pro_data");
         if (local) {
           const parsed = JSON.parse(local);
           setKametiData(parsed);
           setAllKametis([parsed]);
+          setEditUpi(parsed.adminUpi || "");
+          setEditDueDay(parsed.dueDay || "10");
           setCurrentView("active");
         } else {
-          setCurrentView("list");
+          setCurrentView("create");
         }
       }
     } catch (err) {
@@ -93,7 +101,7 @@ export default function App() {
         setAllKametis([parsed]);
         setCurrentView("active");
       } else {
-        setCurrentView("list");
+        setCurrentView("create");
       }
     } finally {
       setIsLoading(false);
@@ -114,13 +122,12 @@ export default function App() {
     }
   }, []);
 
-  // 2. Cloud Save (Multi-Kameti Support ke sath)
+  // 2. Cloud Save
   const saveToCloudAndLocal = async (newData, manualTrigger = false) => {
     setKametiData(newData);
     localStorage.setItem("kameti_app_pro_data", JSON.stringify(newData));
     localStorage.setItem("last_active_kameti_id", newData.id);
 
-    // Update state list
     setAllKametis((prev) => {
       const index = prev.findIndex((k) => k.id === newData.id);
       if (index >= 0) {
@@ -132,7 +139,7 @@ export default function App() {
     });
 
     if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_PROJECT_ID")) {
-      if (manualTrigger) showBanner("⚠️ Supabase Keys check karein");
+      if (manualTrigger) showBanner("⚠️ Supabase keys configure karein");
       return;
     }
 
@@ -154,18 +161,18 @@ export default function App() {
       });
 
       if (res.ok) {
-        if (manualTrigger) showBanner("✅ Cloud par sync ho gaya!");
+        if (manualTrigger) showBanner("✅ Cloud Data Synced!");
       } else {
         showBanner("❌ Cloud Save Error");
       }
     } catch (err) {
-      showBanner("❌ Network Connection Error");
+      showBanner("❌ Network Error");
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Nayi Kameti Setup
+  // Setup New Kameti
   const setupKameti = () => {
     const members = memberSequenceInput
       .split("\n")
@@ -206,7 +213,6 @@ export default function App() {
       });
     }
 
-    // Unique Kameti ID generate karna
     const kametiId = kametiName.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + Date.now().toString().slice(-4);
 
     const newKametiObj = {
@@ -223,15 +229,17 @@ export default function App() {
     };
 
     saveToCloudAndLocal(newKametiObj, true);
+    setEditUpi(newKametiObj.adminUpi);
+    setEditDueDay(newKametiObj.dueDay);
     setCurrentView("active");
 
-    // Clear form inputs
     setKametiName("");
     setMonthlyAmount("");
     setMemberSequenceInput("");
+    setIsMenuOpen(false);
   };
 
-  // Payment update
+  // Payment Toggle
   const updatePaymentStatus = (month, member, status, mode = "Cash") => {
     if (isMemberView) return;
     const currentMemberData = kametiData.payments[month][member] || {};
@@ -253,11 +261,11 @@ export default function App() {
     saveToCloudAndLocal(updated, false);
   };
 
-  // Late Fine: Flat ₹50 Toggle
+  // Late Fine Toggle: Flat ₹50
   const togglePenalty = (month, member) => {
     if (isMemberView) return;
     const currentMemberData = kametiData.payments[month][member] || {};
-    const newPenalty = currentMemberData.penalty ? 0 : 50; // Flat ₹50 late fee
+    const newPenalty = currentMemberData.penalty ? 0 : 50;
     const updated = {
       ...kametiData,
       payments: {
@@ -274,14 +282,88 @@ export default function App() {
     saveToCloudAndLocal(updated, false);
   };
 
-  // Switch between Kametis
-  const switchKameti = (kameti) => {
-    setKametiData(kameti);
-    localStorage.setItem("last_active_kameti_id", kameti.id);
+  // Switch Active Kameti
+  const switchKameti = (k) => {
+    setKametiData(k);
+    setEditUpi(k.adminUpi || "");
+    setEditDueDay(k.dueDay || "10");
+    localStorage.setItem("last_active_kameti_id", k.id);
     setCurrentView("active");
+    setIsMenuOpen(false);
   };
 
-  // Delete specific Kameti
+  // Save Settings
+  const handleSaveSettings = () => {
+    if (!kametiData) return;
+    const updated = {
+      ...kametiData,
+      adminUpi: editUpi.trim(),
+      dueDay: editDueDay.trim() || "10",
+    };
+    saveToCloudAndLocal(updated, true);
+    setSettingsModalOpen(false);
+    showBanner("✅ Kameti Settings Updated!");
+  };
+
+  // Export CSV Report
+  const exportCSVReport = () => {
+    if (!kametiData) return;
+    let csv = `Kameti: ${kametiData.name}\n`;
+    csv += `Total Pool: Rs.${kametiData.totalPool}, Monthly Kisht: Rs.${kametiData.amount}\n\n`;
+    csv += "Month,Winner Name,Due Date,Member,Status,Mode,Date,Late Fine (Rs)\n";
+
+    kametiData.lineup.forEach((item) => {
+      const m = item.turnMonth;
+      const winner = item.memberName;
+      const mDate = getDynamicDueDate(m);
+      const mPayments = kametiData.payments[m] || {};
+
+      Object.entries(mPayments).forEach(([mem, p]) => {
+        csv += `"${m}","${winner}","${mDate}","${mem}","${p.status ? "Paid" : "Pending"}","${p.mode || "-"}","${p.date || "-"}","${p.penalty || 0}"\n`;
+      });
+    });
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${kametiData.name.replace(/\s+/g, "_")}_Full_Report.csv`;
+    link.click();
+    setIsMenuOpen(false);
+    showBanner("📊 Excel/CSV Report Downloaded!");
+  };
+
+  // Backup Export
+  const exportBackup = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(kametiData));
+    const a = document.createElement("a");
+    a.href = dataStr;
+    a.download = `${kametiData.name.replace(/\s+/g, "_")}_backup.json`;
+    a.click();
+    setIsMenuOpen(false);
+    showBanner("💾 JSON Backup Downloaded!");
+  };
+
+  // Backup Import
+  const importBackup = (e) => {
+    const reader = new FileReader();
+    reader.readAsText(e.target.files[0], "UTF-8");
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (parsed.lineup && parsed.payments) {
+          saveToCloudAndLocal(parsed, true);
+          setIsMenuOpen(false);
+          showBanner("✅ Backup Restore Ho Gaya!");
+        } else {
+          alert("Galat backup file hai!");
+        }
+      } catch (err) {
+        alert("File padhne me error aayi!");
+      }
+    };
+  };
+
+  // Delete Kameti
   const deleteKameti = async (id, name) => {
     if (confirm(`Kya aap "${name}" ko delete karna chahte hain?`)) {
       try {
@@ -303,14 +385,15 @@ export default function App() {
         } else {
           setKametiData(null);
           localStorage.removeItem("kameti_app_pro_data");
-          setCurrentView("list");
+          setCurrentView("create");
         }
       }
+      setIsMenuOpen(false);
       showBanner("Kameti delete ho gayi!");
     }
   };
 
-  // Canvas Card Image with Live UPI QR
+  // Canvas Card Image with UPI QR
   const generateSlipImage = (member, month, isPaid, mode, date, penalty = 0) => {
     const canvas = document.createElement("canvas");
     canvas.width = 600;
@@ -493,6 +576,7 @@ export default function App() {
   const copyMemberViewLink = () => {
     const link = `${window.location.origin}${window.location.pathname}?view=member`;
     navigator.clipboard.writeText(link);
+    setIsMenuOpen(false);
     showBanner("🔗 Read-Only Member Link Copied!");
   };
 
@@ -513,14 +597,14 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 p-3 sm:p-5 max-w-xl mx-auto font-sans text-slate-800 pb-20">
+    <div className="min-h-screen bg-slate-100 p-3 sm:p-5 max-w-xl mx-auto font-sans text-slate-800 pb-20 relative overflow-x-hidden">
       {syncMessage && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-2xl border border-slate-700 animate-bounce">
           {syncMessage}
         </div>
       )}
 
-      {/* Header */}
+      {/* TOP HEADER */}
       <div className="flex justify-between items-center mb-5">
         <div>
           <div className="flex items-center gap-2">
@@ -539,204 +623,281 @@ export default function App() {
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-500 font-medium">Multi-Kameti & Auto Due Dates</p>
+          <p className="text-xs text-slate-500 font-medium">Smart Chit Fund System</p>
         </div>
 
-        {/* Back / Switch Kameti Button */}
+        {/* HAMBURGER MENU BUTTON */}
         {!isMemberView && (
-          <div className="flex items-center gap-1.5">
-            {currentView === "active" ? (
-              <button
-                onClick={() => setCurrentView("list")}
-                className="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs px-2.5 py-1.5 rounded-lg font-bold shadow-sm flex items-center gap-1 hover:bg-indigo-100 transition-all"
-                title="Switch ya New Kameti"
-              >
-                📂 Kameti List ({allKametis.length})
-              </button>
-            ) : (
-              kametiData && (
-                <button
-                  onClick={() => setCurrentView("active")}
-                  className="bg-slate-800 text-white text-xs px-2.5 py-1.5 rounded-lg font-bold shadow-sm"
-                >
-                  ← Back to Kameti
-                </button>
-              )
-            )}
-          </div>
+          <button
+            onClick={() => setIsMenuOpen(true)}
+            className="p-2.5 bg-white border border-slate-200 rounded-xl shadow-xs hover:bg-slate-50 text-slate-700 active:scale-95 transition-all"
+            title="Open Features Menu"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
         )}
       </div>
 
       {/* ========================================================= */}
-      {/* VIEW 1: KAMETI LIST & NEW KAMETI CREATION SCREEN          */}
+      {/* SLIDE-OUT DRAWER MENU                                     */}
       {/* ========================================================= */}
-      {currentView === "list" ? (
-        <div className="space-y-5">
-          {/* List of active kametis */}
-          {allKametis.length > 0 && (
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-              <h3 className="font-bold text-slate-800 text-sm mb-3">📂 Aapki Running Kametis</h3>
-              <div className="space-y-2">
-                {allKametis.map((k) => (
-                  <div
-                    key={k.id}
-                    className="flex justify-between items-center p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50/50 transition-colors"
-                  >
-                    <div className="cursor-pointer flex-1" onClick={() => switchKameti(k)}>
-                      <h4 className="font-bold text-indigo-900 text-sm">{k.name}</h4>
-                      <p className="text-xs text-slate-500">
-                        ₹{k.amount} / member • Pool: ₹{k.totalPool} • {k.lineup?.length} Members
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => switchKameti(k)}
-                        className="bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-lg font-semibold hover:bg-indigo-700"
-                      >
-                        Open →
-                      </button>
-                      <button
-                        onClick={() => deleteKameti(k.id, k.name)}
-                        className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg text-xs"
-                        title="Delete this Kameti"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+      {isMenuOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop */}
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-xs" onClick={() => setIsMenuOpen(false)}></div>
 
-          {/* Form to create another new Kameti */}
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-            <div className="flex justify-between items-center border-b pb-2">
-              <h2 className="text-base font-bold text-slate-900">➕ Nayi Kameti Add Karein</h2>
-              {kametiData && (
-                <button onClick={() => setCurrentView("active")} className="text-xs font-semibold text-indigo-600">
-                  Cancel
+          {/* Drawer Panel */}
+          <div className="relative w-80 max-w-[85%] bg-white h-full shadow-2xl flex flex-col z-10 overflow-y-auto">
+            {/* Drawer Header */}
+            <div className="p-4 border-b flex justify-between items-center bg-indigo-700 text-white">
+              <div>
+                <h3 className="font-black text-lg">⚡ Features & Menu</h3>
+                <p className="text-[11px] text-indigo-200">Kameti Control Panel</p>
+              </div>
+              <button
+                onClick={() => setIsMenuOpen(false)}
+                className="p-1 rounded-lg hover:bg-indigo-600 text-white font-bold text-xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Menu Options */}
+            <div className="p-4 space-y-4 flex-1">
+              {/* Kameti Switcher Section */}
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                  Kameti Switcher ({allKametis.length})
+                </span>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {allKametis.map((k) => (
+                    <div
+                      key={k.id}
+                      onClick={() => switchKameti(k)}
+                      className={`p-2.5 rounded-xl border text-xs cursor-pointer flex justify-between items-center transition-colors ${
+                        kametiData?.id === k.id
+                          ? "bg-indigo-50 border-indigo-300 font-bold text-indigo-900"
+                          : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      <div className="truncate flex-1">
+                        <p className="truncate">{k.name}</p>
+                        <span className="text-[10px] text-slate-500 font-normal">₹{k.amount} • {k.lineup?.length}M</span>
+                      </div>
+                      {kametiData?.id === k.id && <span className="text-indigo-600 font-bold ml-1">✓ Active</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="space-y-2 pt-2 border-t">
+                <button
+                  onClick={() => {
+                    setCurrentView("create");
+                    setIsMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 flex items-center gap-2.5"
+                >
+                  <span className="text-base">➕</span> Start New Kameti
                 </button>
-              )}
-            </div>
 
-            <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-              <button
-                onClick={() => setIsExistingKameti(true)}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
-                }`}
-              >
-                ⚡ Pehle Se Chal Rahi Hai
-              </button>
-              <button
-                onClick={() => setIsExistingKameti(false)}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  !isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
-                }`}
-              >
-                🎲 Nayi Kameti
-              </button>
-            </div>
+                <button
+                  onClick={() => {
+                    setSettingsModalOpen(true);
+                    setIsMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-2.5"
+                >
+                  <span className="text-base">⚙️</span> Edit UPI / Due Date
+                </button>
 
-            <div>
-              <label className="text-xs font-bold text-slate-600 uppercase">Kameti Name</label>
-              <input
-                type="text"
-                placeholder="e.g. Friends 50k Kameti"
-                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-                value={kametiName}
-                onChange={(e) => setKametiName(e.target.value)}
-              />
-            </div>
+                <button
+                  onClick={copyMemberViewLink}
+                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-2.5"
+                >
+                  <span className="text-base">🔗</span> Share Member Link (Read-Only)
+                </button>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-slate-600 uppercase">Monthly Kisht (₹)</label>
-                <input
-                  type="number"
-                  placeholder="5000"
-                  className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-                  value={monthlyAmount}
-                  onChange={(e) => setMonthlyAmount(e.target.value)}
-                />
+                <button
+                  onClick={exportCSVReport}
+                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 flex items-center gap-2.5"
+                >
+                  <span className="text-base">📊</span> Export Excel / CSV Report
+                </button>
+
+                <button
+                  onClick={exportBackup}
+                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-2.5"
+                >
+                  <span className="text-base">💾</span> Download JSON Backup
+                </button>
+
+                <input type="file" ref={fileInputRef} onChange={importBackup} accept=".json" className="hidden" />
+                <button
+                  onClick={() => fileInputRef.current.click()}
+                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-2.5"
+                >
+                  <span className="text-base">📥</span> Restore Backup File
+                </button>
               </div>
-              <div>
-                <label className="text-xs font-bold text-slate-600 uppercase">Har Mahine Ki Tareekh</label>
-                <input
-                  type="number"
-                  placeholder="10"
-                  className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-                  value={dueDay}
-                  onChange={(e) => setDueDay(e.target.value)}
-                />
-              </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-slate-600 uppercase">Start Month (Month 1)</label>
-                <input
-                  type="month"
-                  className="w-full border p-2 rounded-xl mt-1 text-sm outline-none font-semibold text-slate-700"
-                  value={startMonthYear}
-                  onChange={(e) => setStartMonthYear(e.target.value)}
-                />
-              </div>
-              {isExistingKameti && (
-                <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase">Abhi Konsa Month Hai?</label>
-                  <input
-                    type="number"
-                    placeholder="3"
-                    className="w-full border p-2.5 rounded-xl mt-1 text-sm font-bold text-indigo-700 outline-none"
-                    value={currentRunningMonth}
-                    onChange={(e) => setCurrentRunningMonth(e.target.value)}
-                  />
+              {/* Danger Zone */}
+              {kametiData && (
+                <div className="pt-4 border-t">
+                  <button
+                    onClick={() => deleteKameti(kametiData.id, kametiData.name)}
+                    className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold text-red-600 hover:bg-red-50 flex items-center gap-2.5"
+                  >
+                    <span className="text-base">🗑️</span> Delete This Kameti
+                  </button>
                 </div>
               )}
             </div>
 
-            <div>
-              <label className="text-xs font-bold text-slate-600 uppercase">Admin UPI ID (QR ke liye)</label>
-              <input
-                type="text"
-                placeholder="e.g. mobile@upi"
-                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
-                value={adminUpi}
-                onChange={(e) => setAdminUpi(e.target.value)}
-              />
+            {/* Drawer Footer */}
+            <div className="p-3 bg-slate-50 border-t text-center text-[11px] text-slate-400">
+              Kameti Pro v3.0 • Cloud Synced
             </div>
+          </div>
+        </div>
+      )}
 
-            <div>
-              <label className="text-xs font-bold text-slate-600 uppercase">
-                {isExistingKameti
-                  ? "Members Lineup (Line 1 = Month 1, Line 2 = Month 2, Line 3 = Month 3 Payout)"
-                  : "Members (Har line me ek naam)"}
-              </label>
-              <textarea
-                rows="6"
-                placeholder="1st Winner Name&#10;2nd Winner Name&#10;3rd Winner Name&#10;4th Member"
-                className="w-full border p-2.5 rounded-xl mt-1 text-sm font-mono outline-none"
-                value={memberSequenceInput}
-                onChange={(e) => setMemberSequenceInput(e.target.value)}
-              />
-            </div>
+      {/* ========================================================= */}
+      {/* SCREEN 1: CREATE NEW KAMETI                               */}
+      {/* ========================================================= */}
+      {currentView === "create" ? (
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex justify-between items-center border-b pb-2">
+            <h2 className="text-base font-bold text-slate-900">➕ Nayi Kameti Setup</h2>
+            {kametiData && (
+              <button
+                onClick={() => setCurrentView("active")}
+                className="text-xs font-semibold text-indigo-600 hover:underline"
+              >
+                ← Back
+              </button>
+            )}
+          </div>
 
+          <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
             <button
-              onClick={setupKameti}
-              className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-md"
+              onClick={() => setIsExistingKameti(true)}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
+              }`}
             >
-              {isExistingKameti ? "🚀 Load & Save to Cloud" : "🎲 Draw & Save to Cloud"}
+              ⚡ Pehle Se Chal Rahi Hai
+            </button>
+            <button
+              onClick={() => setIsExistingKameti(false)}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                !isExistingKameti ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"
+              }`}
+            >
+              🎲 Nayi Kameti (Lucky Draw)
             </button>
           </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-600 uppercase">Kameti Name</label>
+            <input
+              type="text"
+              placeholder="e.g. Friends 50k Kameti"
+              className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+              value={kametiName}
+              onChange={(e) => setKametiName(e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">Monthly Kisht (₹)</label>
+              <input
+                type="number"
+                placeholder="5000"
+                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                value={monthlyAmount}
+                onChange={(e) => setMonthlyAmount(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">Har Mahine Ki Tareekh</label>
+              <input
+                type="number"
+                placeholder="10"
+                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                value={dueDay}
+                onChange={(e) => setDueDay(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">Start Month (Month 1)</label>
+              <input
+                type="month"
+                className="w-full border p-2 rounded-xl mt-1 text-sm outline-none font-semibold text-slate-700"
+                value={startMonthYear}
+                onChange={(e) => setStartMonthYear(e.target.value)}
+              />
+            </div>
+            {isExistingKameti && (
+              <div>
+                <label className="text-xs font-bold text-slate-600 uppercase">Abhi Konsa Month Hai?</label>
+                <input
+                  type="number"
+                  placeholder="3"
+                  className="w-full border p-2.5 rounded-xl mt-1 text-sm font-bold text-indigo-700 outline-none"
+                  value={currentRunningMonth}
+                  onChange={(e) => setCurrentRunningMonth(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-600 uppercase">Admin UPI ID (QR ke liye)</label>
+            <input
+              type="text"
+              placeholder="e.g. mobile@upi"
+              className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+              value={adminUpi}
+              onChange={(e) => setAdminUpi(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-600 uppercase">
+              {isExistingKameti
+                ? "Members Lineup (Line 1 = Month 1, Line 2 = Month 2, Line 3 = Month 3 Payout)"
+                : "Members (Har line me ek naam)"}
+            </label>
+            <textarea
+              rows="6"
+              placeholder="1st Winner Name&#10;2nd Winner Name&#10;3rd Winner Name&#10;4th Member"
+              className="w-full border p-2.5 rounded-xl mt-1 text-sm font-mono outline-none"
+              value={memberSequenceInput}
+              onChange={(e) => setMemberSequenceInput(e.target.value)}
+            />
+          </div>
+
+          <button
+            onClick={setupKameti}
+            className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-md transition-all active:scale-[0.99]"
+          >
+            {isExistingKameti ? "🚀 Load & Save to Cloud" : "🎲 Draw & Save to Cloud"}
+          </button>
         </div>
       ) : (
         /* ========================================================= */
-        /* VIEW 2: ACTIVE KAMETI DASHBOARD                           */
+        /* SCREEN 2: ACTIVE KAMETI DASHBOARD                         */
         /* ========================================================= */
         <div className="space-y-4">
-          {/* Header Card */}
+          {/* Top Banner Card */}
           <div className="bg-indigo-700 text-white p-4 rounded-2xl shadow-md">
             <div className="flex justify-between items-start">
               <div>
@@ -803,23 +964,12 @@ export default function App() {
                   🎁 {kametiData.lineup.find((i) => i.turnMonth === kametiData.currentMonth)?.memberName}
                 </h3>
               </div>
-              <div className="flex gap-1.5">
-                {!isMemberView && (
-                  <button
-                    onClick={copyMemberViewLink}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-2.5 py-1.5 rounded-lg font-bold border"
-                    title="Copy Read-Only Link for Members"
-                  >
-                    🔗 Link
-                  </button>
-                )}
-                <button
-                  onClick={() => sendMonthStatusToWhatsApp(kametiData.currentMonth)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 shadow-sm"
-                >
-                  📲 Group Update
-                </button>
-              </div>
+              <button
+                onClick={() => sendMonthStatusToWhatsApp(kametiData.currentMonth)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 shadow-sm"
+              >
+                📲 Group Update
+              </button>
             </div>
 
             {/* Checklist */}
@@ -846,7 +996,7 @@ export default function App() {
                   <div className="flex items-center gap-1.5">
                     {!isMemberView && (
                       <>
-                        {/* Flat ₹50 Fine Toggle */}
+                        {/* Late Fine Toggle: Flat ₹50 */}
                         {!pay.status && (
                           <button
                             onClick={() => togglePenalty(kametiData.currentMonth, member)}
@@ -949,7 +1099,57 @@ export default function App() {
         </div>
       )}
 
-      {/* Slip Popup Modal */}
+      {/* ========================================================= */}
+      {/* MODAL: SETTINGS (EDIT UPI & DUE DAY)                      */}
+      {/* ========================================================= */}
+      {settingsModalOpen && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b pb-2">
+              <h3 className="font-bold text-slate-900 text-sm">⚙️ Kameti Settings</h3>
+              <button onClick={() => setSettingsModalOpen(false)} className="text-slate-400 font-bold text-lg">
+                ✕
+              </button>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">Admin UPI ID</label>
+              <input
+                type="text"
+                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                value={editUpi}
+                onChange={(e) => setEditUpi(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase">Har Mahine Ki Due Date</label>
+              <input
+                type="number"
+                className="w-full border p-2.5 rounded-xl mt-1 text-sm outline-none"
+                value={editDueDay}
+                onChange={(e) => setEditDueDay(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                onClick={() => setSettingsModalOpen(false)}
+                className="bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveSettings}
+                className="bg-indigo-600 text-white py-2.5 rounded-xl text-xs font-bold hover:bg-indigo-700"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: RECEIPT SLIP POPUP                                 */}
+      {/* ========================================================= */}
       {receiptModal && generatedImgUrl && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-4 max-w-sm w-full space-y-3 shadow-2xl">
